@@ -4,6 +4,8 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.log4j.Log4j2;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
+import org.springframework.ai.transformer.splitter.TextSplitter;
+import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
@@ -28,7 +30,9 @@ public class HRPolicyLoader {
     public void loadPDF() {
         TikaDocumentReader tikaDocumentReader = new TikaDocumentReader(policyFile);
         List<Document> docs = tikaDocumentReader.get();
+        TextSplitter textSplitter =
+                TokenTextSplitter.builder().withChunkSize(200).withMaxNumChunks(400).build();
         log.info("Loading HR policies into vector store...");
-        vectorStore.add(docs);
+        vectorStore.add(textSplitter.split(docs));
     }
 }
