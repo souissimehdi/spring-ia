@@ -44,7 +44,7 @@ public class ChatMemoryChatClientConfig {
                 .documentRetriever(VectorStoreDocumentRetriever.builder()
                         .vectorStore(vectorStore)
                         .topK(3)
-                        .similarityThreshold(0.5)
+                        .similarityThreshold(0.2)
                         .build())
                 .documentPostProcessors(PIIMaskingDocumentPostProcessor.builder())
                 .build();
