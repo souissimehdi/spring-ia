@@ -1,6 +1,7 @@
 package com.spring.ia.config;
 
 import com.spring.ia.rag.PIIMaskingDocumentPostProcessor;
+import org.springframework.ai.chat.cache.semantic.SemanticCacheAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
@@ -26,11 +27,11 @@ public class ChatMemoryChatClientConfig {
 
     @Bean
     @Qualifier("chatMemoryClient")
-    public ChatClient chatMemoryClient(ChatClient.Builder chatClientBuilder, ChatMemory chatMemory, RetrievalAugmentationAdvisor retrievalAugmentationAdvisor) {
+    public ChatClient chatMemoryClient(ChatClient.Builder chatClientBuilder, ChatMemory chatMemory, RetrievalAugmentationAdvisor retrievalAugmentationAdvisor, SemanticCacheAdvisor semanticCacheAdvisor) {
         MessageChatMemoryAdvisor messageChatMemoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
         SimpleLoggerAdvisor simpleLoggerAdvisor = new SimpleLoggerAdvisor();
         return  chatClientBuilder
-                .defaultAdvisors(messageChatMemoryAdvisor, simpleLoggerAdvisor, retrievalAugmentationAdvisor)
+                .defaultAdvisors(messageChatMemoryAdvisor, simpleLoggerAdvisor, retrievalAugmentationAdvisor, semanticCacheAdvisor)
                 .build();
     }
 
