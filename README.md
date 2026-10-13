@@ -5,7 +5,7 @@ backed by **Anthropic Claude on AWS Bedrock**.
 
 The project grows step by step from a simple "hello world" chat endpoint to a full
 **Retrieval-Augmented Generation (RAG)** pipeline with persistent chat memory, a vector database,
-web search and PII masking.
+web search, PII masking and semantic caching.
 
 ---
 
@@ -37,6 +37,7 @@ web search and PII masking.
 | **RAG** | Qdrant vector store, Titan embeddings, PDF ingestion with Apache Tika, token-based chunking |
 | **Advanced RAG** | `RetrievalAugmentationAdvisor`, query translation (pre-retrieval), PII masking (post-retrieval) |
 | **Web search RAG** | Custom `DocumentRetriever` backed by the Tavily search API |
+| **Semantic caching** | `SemanticCacheAdvisor` answers similar questions from a cache instead of calling the LLM (Qdrant, Redis variant included) |
 
 ---
 
@@ -53,6 +54,7 @@ web search and PII masking.
 | Chat memory store | **H2** file database (`~/chatmemory`) via `JdbcChatMemoryRepository` |
 | Document reader | Apache **Tika** (`spring-ai-tika-document-reader`) |
 | Web search | **Tavily** Search API |
+| Semantic cache | `spring-ai-redis-semantic-cache` `DefaultSemanticCache`, stored in a dedicated Qdrant collection |
 | Build | Maven (wrapper included) |
 
 ---
@@ -65,6 +67,7 @@ flowchart LR
 
     subgraph Spring Boot app
         C --> CC[ChatClient]
+        CC --> A0[SemanticCacheAdvisor]
         CC --> A1[MessageChatMemoryAdvisor]
         CC --> A2[RetrievalAugmentationAdvisor]
         CC --> A3[SimpleLogger / TokenUsageAudit advisors]
@@ -77,6 +80,7 @@ flowchart LR
 
     A1 <--> H2[(H2 chat memory)]
     R <--> VS[(Qdrant)]
+    A0 <--> SC[(Qdrant semantic-cache)]
     VS -. embeddings .-> E[Bedrock Titan v2]
     W <--> TV[Tavily API]
     CC <--> B[Bedrock Claude]
@@ -84,13 +88,15 @@ flowchart LR
 
 **RAG flow for `/api/rag/document/chat`:**
 
-1. The user question is translated to English (`TranslationQueryTransformer`).
-2. The question is embedded with Titan v2 and the top 3 most similar chunks are fetched from Qdrant
+1. **Semantic cache check:** if a question at least 80% similar was already answered, the cached
+   answer is returned right away, with no retrieval and no LLM call.
+2. The user question is translated to English (`TranslationQueryTransformer`).
+3. The question is embedded with Titan v2 and the top 3 most similar chunks are fetched from Qdrant
    (`similarityThreshold = 0.2`).
-3. Emails and phone numbers are masked in the retrieved chunks (`PIIMaskingDocumentPostProcessor`).
-4. The chunks are added to the prompt, together with the user's last 10 messages from chat memory.
-5. Claude answers using only that context. If nothing relevant is found, it says the question
-   is outside its knowledge base.
+4. Emails and phone numbers are masked in the retrieved chunks (`PIIMaskingDocumentPostProcessor`).
+5. The chunks are added to the prompt, together with the user's last 10 messages from chat memory.
+6. Claude answers using only that context. If nothing relevant is found, it says the question
+   is outside its knowledge base. The answer is stored in the semantic cache.
 
 ---
 
@@ -106,7 +112,9 @@ flowchart LR
 - A **Tavily API key** (free tier available at <https://tavily.com>). It's required at startup
   because the web-search ChatClient is created eagerly.
 
-### 1. Set the environment variables
+### 1. Provide your credentials
+
+**Option A: environment variables**
 
 ```bash
 export AWS_ACCESS_KEY_ID=<your-access-key>
@@ -122,7 +130,17 @@ $env:AWS_SECRET_ACCESS_KEY="<your-secret-key>"
 $env:TAVILY_SEARCH_API_KEY="<your-tavily-key>"
 ```
 
-> Never commit credentials. `application.properties` only references these variables.
+**Option B: local file (AWS keys only).** Create `src/main/resources/secrets.properties`:
+
+```properties
+spring.ai.bedrock.aws.access-key=<your-access-key>
+spring.ai.bedrock.aws.secret-key=<your-secret-key>
+```
+
+It's loaded automatically through `spring.config.import`, overrides the environment-variable
+placeholders, and is **git-ignored**.
+
+> Never commit credentials. `application.properties` only references environment variables.
 
 ### 2. Run the application
 
@@ -133,7 +151,7 @@ $env:TAVILY_SEARCH_API_KEY="<your-tavily-key>"
 On startup the application:
 
 1. starts the Qdrant container (`spring-boot-docker-compose`),
-2. creates the `chat_memory` collection and the H2 chat-memory schema,
+2. creates the `chat_memory` and `semantic-cache` collections and the H2 chat-memory schema,
 3. reads `HR_Policies.pdf`, splits it into ~200-token chunks, embeds them and stores them in Qdrant.
 
 The API is available at `http://localhost:8080`.
@@ -165,13 +183,16 @@ Main settings in [`application.properties`](src/main/resources/application.prope
 | `spring.ai.model.embedding=bedrock-titan` | Use Titan for embeddings |
 | `spring.ai.bedrock.titan.embedding.model` | `amazon.titan-embed-text-v2:0` |
 | `spring.ai.vectorstore.qdrant.*` | Qdrant host/port (gRPC `6334`), collection name, schema init |
+| `spring.config.import=optional:classpath:secrets.properties` | Load local credentials from the git-ignored file |
 | `spring.datasource.*` | H2 file database for chat memory |
 | `spring.ai.chat.memory.repository.jdbc.initialize-schema=always` | Create the chat memory table on startup |
 | `logging.level.org.springframework.ai.chat.client.advisor=DEBUG` | Show full prompts/responses from `SimpleLoggerAdvisor` |
 
 RAG tuning lives in [`ChatMemoryChatClientConfig`](src/main/java/com/spring/ia/config/ChatMemoryChatClientConfig.java)
 (`topK`, `similarityThreshold`, query transformers, post-processors) and chunking in
-[`HRPolicyLoader`](src/main/java/com/spring/ia/rag/HRPolicyLoader.java).
+[`HRPolicyLoader`](src/main/java/com/spring/ia/rag/HRPolicyLoader.java). Semantic cache settings
+(storage, `similarityThreshold = 0.8`) live in
+[`SemanticCacheConfig`](src/main/java/com/spring/ia/config/SemanticCacheConfig.java).
 
 ---
 
@@ -242,6 +263,18 @@ curl -H "username: alice" "http://localhost:8080/api/rag/document/chat?message=H
 curl -H "username: alice" "http://localhost:8080/api/rag/web-search/chat?message=Latest%20Spring%20AI%20release"
 ```
 
+### Semantic cache
+
+| Endpoint | Params | Description |
+|---|---|---|
+| `/api/semantic-chat` | `message` | General chat with a semantic cache. Rephrased questions reuse the cached answer |
+
+```bash
+curl "http://localhost:8080/api/semantic-chat?message=What%20is%20the%20capital%20of%20France%3F"
+# Similar meaning, different words: answered from the cache (check the logs, no token usage)
+curl "http://localhost:8080/api/semantic-chat?message=Tell%20me%20France's%20capital%20city"
+```
+
 ---
 
 ## Concepts covered
@@ -259,6 +292,7 @@ Advisors intercept every call made through a `ChatClient` (similar to servlet fi
 - `TokenUsageAuditAdvisor` (custom `CallAdvisor`): logs prompt/completion token usage.
 - `MessageChatMemoryAdvisor`: injects conversation history.
 - `RetrievalAugmentationAdvisor`: injects retrieved documents.
+- `SemanticCacheAdvisor`: short-circuits the call when a similar question is already cached.
 
 ### Structured output
 `call().entity(...)` adds format instructions to the prompt and converts the answer into Java types:
@@ -283,6 +317,18 @@ Advanced modules used here:
   reach the LLM.
 - **Custom retriever**: `WebSearchDocumentRetriever` turns Tavily search hits into `Document`s.
 
+### Semantic caching
+A classic cache only hits on the exact same key. A **semantic cache** embeds each question and looks
+for a previously answered question with a similar *meaning* (`similarityThreshold = 0.8`):
+
+- **Hit**: the stored answer is returned, with no LLM call, no tokens paid and an instant response.
+- **Miss**: the LLM answers and the question/answer pair is stored for next time.
+
+The cache started on **Redis** (`DefaultSemanticCache` with a Jedis client, still in the code as
+comments, with Redis in `compose.yml`). It now reuses the existing **Qdrant** instance with a
+dedicated `semantic-cache` collection, so no extra infrastructure is needed. It's applied both to
+`/api/semantic-chat` and to the RAG chat client.
+
 ---
 
 ## Project structure
@@ -293,7 +339,9 @@ src/main/java/com/spring/ia
 │   └── TokenUsageAuditAdvisor.java          # custom advisor logging token usage
 ├── config/
 │   ├── ChatClientConfig.java                # default ChatClient (system prompt, options)
-│   ├── ChatMemoryChatClientConfig.java      # chat memory + RAG advisor
+│   ├── ChatMemoryChatClientConfig.java      # chat memory + RAG + semantic cache advisors
+│   ├── SemanticCacheConfig.java             # semantic cache (Qdrant store, Redis variant)
+│   ├── SemanticChatClientConfig.java        # ChatClient with the semantic cache
 │   └── WebSearchRAGChatClientConfig.java    # web-search RAG ChatClient
 ├── controller/
 │   ├── ChatController.java                  # /api/chat
@@ -302,7 +350,8 @@ src/main/java/com/spring/ia
 │   ├── PromptStaffingController.java        # /api/prompt-stuffing
 │   ├── StructuredOutPutController.java      # /api/chat-bean, -list, -map, -bean-list
 │   ├── ChatMemoryController.java            # /api/chat-memory
-│   └── RAGController.java                   # /api/rag/**
+│   ├── RAGController.java                   # /api/rag/**
+│   └── SemanticChatController.java          # /api/semantic-chat
 ├── model/
 │   └── CountryCities.java
 └── rag/
@@ -313,9 +362,10 @@ src/main/java/com/spring/ia
 
 src/main/resources
 ├── application.properties
+├── secrets.properties                       # local credentials (git-ignored, you create it)
 ├── HR_Policies.pdf
 └── promptTemplates/*.st
-compose.yml                                  # Qdrant
+compose.yml                                  # Qdrant (Redis commented out)
 ```
 
 ---
@@ -328,16 +378,21 @@ compose.yml                                  # Qdrant
 | `Environment variable TAVILY_SEARCH_API_KEY must be set` on startup | Set `TAVILY_SEARCH_API_KEY`. The web-search ChatClient is created at startup. |
 | `400 Missing request header 'username'` | Memory and RAG endpoints need the `username` header, so use `curl -H` or Postman instead of a browser. |
 | Duplicate chunks in Qdrant | `HRPolicyLoader` re-ingests the PDF on every start. Delete the collection or add an "already loaded" check. |
+| Semantic cache returns an answer to a *different* question | The 0.8 threshold is too loose for your questions. Raise it in `SemanticCacheConfig`, or delete the `semantic-cache` collection in the Qdrant dashboard to clear the cache. |
 | Bedrock `AccessDeniedException` | Enable model access for Claude and Titan in the Bedrock console for your region. |
 
 ---
 
 ## Roadmap
 
+- [x] Chat basics, prompts, advisors, streaming and structured output
+- [x] Chat memory with JDBC persistence
+- [x] RAG with Qdrant, plus advanced RAG (pre/post-retrieval, web search)
+- [x] **Semantic caching**: reuse answers to semantically similar questions (Redis, then Qdrant)
+
 - [ ] **Tool calling**: let the LLM call Java methods (current time, database queries) and customize tool errors
 - [ ] **Model Context Protocol (MCP)**: MCP client and server (STDIO and remote), tool filtering, sampling, elicitation
 - [ ] **Evaluation**: `RelevancyEvaluator` and `FactCheckingEvaluator` in tests, plus runtime checks with Spring Retry
 - [ ] **Observability**: Actuator metrics, Prometheus and Grafana dashboards, OpenTelemetry tracing with Jaeger
-- [ ] **Semantic caching**: reuse answers to semantically similar questions (Redis / Qdrant)
 - [ ] **Audio and images**: transcription, text-to-speech and image generation
 - [ ] **AI agent**: an end-to-end agent combining RAG, tools and MCP
