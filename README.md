@@ -5,7 +5,7 @@ backed by **Anthropic Claude on AWS Bedrock**.
 
 The project grows step by step from a simple "hello world" chat endpoint to a full
 **Retrieval-Augmented Generation (RAG)** pipeline with persistent chat memory, a vector database,
-web search, PII masking and semantic caching.
+web search, PII masking, semantic caching and **tool calling**.
 
 ---
 
@@ -38,6 +38,7 @@ web search, PII masking and semantic caching.
 | **Advanced RAG** | `RetrievalAugmentationAdvisor`, query translation (pre-retrieval), PII masking (post-retrieval) |
 | **Web search RAG** | Custom `DocumentRetriever` backed by the Tavily search API |
 | **Semantic caching** | `SemanticCacheAdvisor` answers similar questions from a cache instead of calling the LLM (Qdrant, Redis variant included) |
+| **Tool calling** | Java methods annotated with `@Tool` that the LLM can call, e.g. to read the real current time in any time zone |
 
 ---
 
@@ -71,6 +72,7 @@ flowchart LR
         CC --> A1[MessageChatMemoryAdvisor]
         CC --> A2[RetrievalAugmentationAdvisor]
         CC --> A3[SimpleLogger / TokenUsageAudit advisors]
+        CC --> TT[TimeTools: @Tool methods]
         A2 --> T[TranslationQueryTransformer]
         A2 --> R[VectorStoreDocumentRetriever]
         A2 --> W[WebSearchDocumentRetriever]
@@ -263,6 +265,19 @@ curl -H "username: alice" "http://localhost:8080/api/rag/document/chat?message=H
 curl -H "username: alice" "http://localhost:8080/api/rag/web-search/chat?message=Latest%20Spring%20AI%20release"
 ```
 
+### Tool calling
+
+| Endpoint | Header | Params | Description |
+|---|---|---|---|
+| `/api/tools/local-time` | `username` | `message` | Time assistant. The LLM calls `TimeTools` to read the real clock, in your time zone or any other |
+
+```bash
+curl -H "username: alice" "http://localhost:8080/api/tools/local-time?message=What%20time%20is%20it%3F"
+curl -H "username: alice" "http://localhost:8080/api/tools/local-time?message=What%20time%20is%20it%20in%20Tokyo%3F"
+```
+
+Check the logs to see which tool was called, e.g. `Returning the current time in the timezone Asia/Tokyo`.
+
 ### Semantic cache
 
 | Endpoint | Params | Description |
@@ -329,6 +344,27 @@ comments, with Redis in `compose.yml`). It now reuses the existing **Qdrant** in
 dedicated `semantic-cache` collection, so no extra infrastructure is needed. It's applied both to
 `/api/semantic-chat` and to the RAG chat client.
 
+### Tool calling
+An LLM only knows its training data. It can't read a clock, a database or an API. **Tool calling**
+lets it ask the application to run a Java method and use the result:
+
+1. Methods annotated with `@Tool` (name and description) are registered on the ChatClient with
+   `defaultTools(...)`. Spring AI sends their names, descriptions and parameter schemas to the model.
+2. When the question needs one, the model replies with a *tool call* instead of an answer:
+   the tool name plus the arguments it chose.
+3. Spring AI runs the Java method, sends the result back to the model, and the model writes the
+   final answer.
+
+[`TimeTools`](src/main/java/com/spring/ia/tools/TimeTools.java) exposes two tools:
+
+| Tool | Parameters | Example question |
+|---|---|---|
+| `getCurrentLocalTime` | none | *"What time is it?"* |
+| `getCurrentTime` | `timeZone` (`@ToolParam`, filled in by the model) | *"What time is it in Tokyo?"* → `Asia/Tokyo` |
+
+The model decides which tool to call (if any) from the descriptions, so clear names and descriptions
+matter as much as the code.
+
 ---
 
 ## Project structure
@@ -342,6 +378,7 @@ src/main/java/com/spring/ia
 │   ├── ChatMemoryChatClientConfig.java      # chat memory + RAG + semantic cache advisors
 │   ├── SemanticCacheConfig.java             # semantic cache (Qdrant store, Redis variant)
 │   ├── SemanticChatClientConfig.java        # ChatClient with the semantic cache
+│   ├── TimeChatClientConfig.java            # ChatClient with the time tools
 │   └── WebSearchRAGChatClientConfig.java    # web-search RAG ChatClient
 ├── controller/
 │   ├── ChatController.java                  # /api/chat
@@ -351,14 +388,17 @@ src/main/java/com/spring/ia
 │   ├── StructuredOutPutController.java      # /api/chat-bean, -list, -map, -bean-list
 │   ├── ChatMemoryController.java            # /api/chat-memory
 │   ├── RAGController.java                   # /api/rag/**
-│   └── SemanticChatController.java          # /api/semantic-chat
+│   ├── SemanticChatController.java          # /api/semantic-chat
+│   └── TimeController.java                  # /api/tools/local-time
 ├── model/
 │   └── CountryCities.java
-└── rag/
-    ├── HRPolicyLoader.java                  # PDF → chunks → Qdrant
-    ├── RandomDataLoader.java                # sample sentences → Qdrant (disabled)
-    ├── PIIMaskingDocumentPostProcessor.java # post-retrieval PII redaction
-    └── WebSearchDocumentRetriever.java      # Tavily-backed DocumentRetriever
+├── rag/
+│   ├── HRPolicyLoader.java                  # PDF → chunks → Qdrant
+│   ├── RandomDataLoader.java                # sample sentences → Qdrant (disabled)
+│   ├── PIIMaskingDocumentPostProcessor.java # post-retrieval PII redaction
+│   └── WebSearchDocumentRetriever.java      # Tavily-backed DocumentRetriever
+└── tools/
+    └── TimeTools.java                       # @Tool methods: local time, time in a time zone
 
 src/main/resources
 ├── application.properties
@@ -379,6 +419,8 @@ compose.yml                                  # Qdrant (Redis commented out)
 | `400 Missing request header 'username'` | Memory and RAG endpoints need the `username` header, so use `curl -H` or Postman instead of a browser. |
 | Duplicate chunks in Qdrant | `HRPolicyLoader` re-ingests the PDF on every start. Delete the collection or add an "already loaded" check. |
 | Semantic cache returns an answer to a *different* question | The 0.8 threshold is too loose for your questions. Raise it in `SemanticCacheConfig`, or delete the `semantic-cache` collection in the Qdrant dashboard to clear the cache. |
+| Time assistant gives a made-up time | The model answered without calling a tool. Check that `TimeTools` is registered with `defaultTools(...)` and look for the `Returning the current time…` log line. Rephrase the tool description if the model keeps skipping it. |
+| Answer says the time zone is unknown / `ZoneRulesException` in the logs | The model passed an invalid zone to `getCurrentTime`. By default Spring AI sends the exception message back to the model, which then apologizes. Ask with a city or an IANA zone (`Europe/Paris`), or validate the zone in the tool. |
 | Bedrock `AccessDeniedException` | Enable model access for Claude and Titan in the Bedrock console for your region. |
 
 ---
@@ -389,8 +431,9 @@ compose.yml                                  # Qdrant (Redis commented out)
 - [x] Chat memory with JDBC persistence
 - [x] RAG with Qdrant, plus advanced RAG (pre/post-retrieval, web search)
 - [x] **Semantic caching**: reuse answers to semantically similar questions (Redis, then Qdrant)
+- [x] **Tool calling (part 1)**: `@Tool` methods for the current time, with and without parameters
+- [ ] **Tool calling (part 2)**: database tools, returning tool results directly, custom tool error handling
 
-- [ ] **Tool calling**: let the LLM call Java methods (current time, database queries) and customize tool errors
 - [ ] **Model Context Protocol (MCP)**: MCP client and server (STDIO and remote), tool filtering, sampling, elicitation
 - [ ] **Evaluation**: `RelevancyEvaluator` and `FactCheckingEvaluator` in tests, plus runtime checks with Spring Retry
 - [ ] **Observability**: Actuator metrics, Prometheus and Grafana dashboards, OpenTelemetry tracing with Jaeger
