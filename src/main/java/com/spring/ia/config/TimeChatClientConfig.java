@@ -1,6 +1,7 @@
 package com.spring.ia.config;
 
 import com.spring.ia.advisors.TokenUsageAuditAdvisor;
+import com.spring.ia.tools.TimeTools;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
@@ -16,11 +17,12 @@ public class TimeChatClientConfig {
 
     @Bean("timeChatClient")
     public ChatClient chatClient(ChatClient.Builder chatClientBuilder,
-                                 ChatMemory chatMemory) {
+                                 ChatMemory chatMemory, TimeTools timeTools) {
         Advisor loggerAdvisor = new SimpleLoggerAdvisor();
         Advisor tokenUsageAdvisor = new TokenUsageAuditAdvisor();
         Advisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
         return chatClientBuilder
+                .defaultTools(timeTools)
                 .defaultAdvisors(List.of(loggerAdvisor, memoryAdvisor,tokenUsageAdvisor))
                 .build();
     }
