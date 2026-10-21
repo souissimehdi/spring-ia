@@ -1,0 +1,32 @@
+package com.spring.ia.tools;
+
+import com.spring.ia.entity.HelpDeskTicket;
+import com.spring.ia.model.TicketRequest;
+import com.spring.ia.service.HelpDeskTicketService;
+import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.stereotype.Component;
+
+@Component
+@RequiredArgsConstructor
+public class HelpDeskTools {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(HelpDeskTools.class);
+
+    private final HelpDeskTicketService service;
+
+    @Tool(name = "createTicket", description = "Create the Support Ticket")
+    String createTicket(@ToolParam(description = "Details to create a Support ticket")
+                        TicketRequest ticketRequest, ToolContext toolContext) {
+        String username = (String) toolContext.getContext().get("username");
+        LOGGER.info("Creating support ticket for user: {} with details: {}", username, ticketRequest);
+        HelpDeskTicket savedTicket = service.createTicket(ticketRequest,username);
+        LOGGER.info("Ticket created successfully. Ticket ID: {}, Username: {}", savedTicket.getId(), savedTicket.getUsername());
+        return "Ticket #" + savedTicket.getId() + " created successfully for user " + savedTicket.getUsername();
+    }
+
+}
