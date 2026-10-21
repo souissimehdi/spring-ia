@@ -4,7 +4,6 @@ import com.spring.ia.rag.PIIMaskingDocumentPostProcessor;
 import org.springframework.ai.chat.cache.semantic.SemanticCacheAdvisor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.memory.repository.jdbc.JdbcChatMemoryRepository;
@@ -26,12 +25,18 @@ public class ChatMemoryChatClientConfig {
     }
 
     @Bean
+    MessageChatMemoryAdvisor messageChatMemoryAdvisor(ChatMemory chatMemory) {
+        return MessageChatMemoryAdvisor.builder(chatMemory).build();
+    }
+
+    @Bean
     @Qualifier("chatMemoryClient")
-    public ChatClient chatMemoryClient(ChatClient.Builder chatClientBuilder, ChatMemory chatMemory, RetrievalAugmentationAdvisor retrievalAugmentationAdvisor, SemanticCacheAdvisor semanticCacheAdvisor) {
-        MessageChatMemoryAdvisor messageChatMemoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
-        SimpleLoggerAdvisor simpleLoggerAdvisor = new SimpleLoggerAdvisor();
-        return  chatClientBuilder
-                .defaultAdvisors(messageChatMemoryAdvisor, simpleLoggerAdvisor, retrievalAugmentationAdvisor, semanticCacheAdvisor)
+    public ChatClient chatMemoryClient(ChatClient.Builder chatClientBuilder,
+                                       MessageChatMemoryAdvisor messageChatMemoryAdvisor,
+                                       RetrievalAugmentationAdvisor retrievalAugmentationAdvisor,
+                                       SemanticCacheAdvisor semanticCacheAdvisor) {
+        return chatClientBuilder
+                .defaultAdvisors(messageChatMemoryAdvisor, retrievalAugmentationAdvisor, semanticCacheAdvisor)
                 .build();
     }
 

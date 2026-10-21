@@ -16,7 +16,6 @@ public class ChatClientConfig {
                 .maxTokens(200);
         return chatClientBuilder
                 .defaultOptions(chatOptions)
-//                .defaultAdvisors(new SimpleLoggerAdvisor())
                 .defaultSystem("""
                         You are an internal HR assistant. Your role is to help\s
                         employees with questions related to HR policies, such as\s

@@ -2,7 +2,6 @@ package com.spring.ia.controller;
 
 import com.spring.ia.model.CountryCities;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.converter.ListOutputConverter;
 import org.springframework.ai.converter.MapOutputConverter;
 import org.springframework.core.ParameterizedTypeReference;
@@ -22,9 +21,7 @@ public class StructuredOutPutController {
     private final ChatClient chatClient;
 
     public StructuredOutPutController(ChatClient.Builder chatClientBuilder) {
-        this.chatClient = chatClientBuilder
-                .defaultAdvisors(new SimpleLoggerAdvisor())
-                .build();
+        this.chatClient = chatClientBuilder.build();
     }
 
     @GetMapping("/chat-bean")
