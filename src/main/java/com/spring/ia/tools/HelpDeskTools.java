@@ -21,7 +21,7 @@ public class HelpDeskTools {
 
     private final HelpDeskTicketService service;
 
-    @Tool(name = "createTicket", description = "Create the Support Ticket")
+    @Tool(name = "createTicket", description = "Create the Support Ticket"/*, returnDirect = true*/)
     String createTicket(@ToolParam(description = "Details to create a Support ticket")
                         TicketRequest ticketRequest, ToolContext toolContext) {
         String username = (String) toolContext.getContext().get("username");
